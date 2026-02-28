@@ -11,6 +11,7 @@ from PIL import Image
 def init_db():
     conn = sqlite3.connect('news_plus_data.db', check_same_thread=False)
     c = conn.cursor()
+    # 增加 image 字段用于存储图片的 Base64 字符串
     c.execute('''
         CREATE TABLE IF NOT EXISTS articles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,8 +30,9 @@ conn = init_db()
 # --- 图片处理工具 ---
 def image_to_base64(uploaded_file):
     if uploaded_file is not None:
+        # 打开图片并压缩，防止数据库过大
         img = Image.open(uploaded_file)
-        img.thumbnail((800, 800))
+        img.thumbnail((800, 800))  # 限制最大尺寸
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode()
@@ -54,24 +56,6 @@ def update_article(id, title, content, image_b64):
 
 # --- 页面配置 ---
 st.set_page_config(page_title="信息发布门户", layout="centered")
-
-# ⭐ 修改 1：注入 CSS 解决间隙问题和颜色失效问题
-st.markdown("""
-    <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
-    <style>
-        /* 减小标题与下方内容的间隙 */
-        .stHeading { margin-bottom: -2rem; }
-        .stExpander { margin-top: 1rem; }
-        
-        /* 修复富文本颜色显示 */
-        .ql-editor {
-            padding: 0 !important;
-            height: auto !important;
-            line-height: 1.6;
-        }
-        .ql-snow .ql-editor .ql-bg-black { background-color: #000; }
-    </style>
-""", unsafe_allow_html=True)
 
 # --- 侧边栏：登录逻辑 ---
 ADMIN_USER = "admin"
@@ -98,7 +82,7 @@ with st.sidebar:
             st.rerun()
 
 # --- 主界面 ---
-st.title("📢 信息资讯")
+st.title("🎨 信息资讯")
 
 # 1. 管理员发布区
 if st.session_state.logged_in:
@@ -106,6 +90,7 @@ if st.session_state.logged_in:
         new_title = st.text_input("文章标题")
         
         st.write("正文编辑 (支持字体加粗、颜色、列表等):")
+        # 富文本编辑器
         new_content = st_quill(placeholder="撰写内容...", key="main_editor")
         
         new_image = st.file_uploader("上传封面图片", type=["jpg", "png", "jpeg"])
@@ -134,15 +119,8 @@ for _, row in articles.iterrows():
         if row['image_base64']:
             st.image(base64.b64decode(row['image_base64']), use_container_width=True)
         
-        # ⭐ 修改 2：将内容包裹在特定的类名中，使颜色 CSS 生效
-        formatted_content = f"""
-        <div class="ql-snow">
-            <div class="ql-editor">
-                {row['content']}
-            </div>
-        </div>
-        """
-        st.markdown(formatted_content, unsafe_allow_html=True)
+        # 显示富文本内容 (注意：st.markdown 需要开启 unsafe_allow_html)
+        st.markdown(row['content'], unsafe_allow_html=True)
         
         # 管理员操作
         if st.session_state.logged_in:
