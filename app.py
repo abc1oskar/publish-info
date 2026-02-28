@@ -54,7 +54,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 with st.sidebar:
-    st.title("🛡️ 权限管理")
+    st.title("🛡️ 登录发布")
     if not st.session_state.logged_in:
         username = st.text_input("用户名")
         password = st.text_input("密码", type="password")
@@ -72,7 +72,7 @@ with st.sidebar:
             st.rerun()
 
 # --- 主界面 ---
-st.title("📢 校园信息发布平台")
+st.title("📢 信息发布平台")
 
 # 如果是管理员，显示发布入口
 if st.session_state.logged_in:
