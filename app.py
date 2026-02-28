@@ -1,17 +1,23 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
+import base64
 from datetime import datetime
+from streamlit_quill import st_quill
+from io import BytesIO
+from PIL import Image
 
 # --- 数据库初始化 ---
 def init_db():
-    conn = sqlite3.connect('news_data.db', check_same_thread=False)
+    conn = sqlite3.connect('news_plus_data.db', check_same_thread=False)
     c = conn.cursor()
+    # 增加 image 字段用于存储图片的 Base64 字符串
     c.execute('''
         CREATE TABLE IF NOT EXISTS articles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
             content TEXT NOT NULL,
+            image_base64 TEXT,
             author TEXT,
             date TEXT
         )
@@ -21,111 +27,126 @@ def init_db():
 
 conn = init_db()
 
-# --- 辅助函数 ---
-def get_all_articles():
-    return pd.read_sql('SELECT * FROM articles ORDER BY id DESC', conn)
+# --- 图片处理工具 ---
+def image_to_base64(uploaded_file):
+    if uploaded_file is not None:
+        # 打开图片并压缩，防止数据库过大
+        img = Image.open(uploaded_file)
+        img.thumbnail((800, 800))  # 限制最大尺寸
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        return base64.b64encode(buffered.getvalue()).decode()
+    return None
 
-def add_article(title, content, author):
+# --- 数据库操作 ---
+def add_article(title, content, image_b64, author):
     c = conn.cursor()
-    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('INSERT INTO articles (title, content, author, date) VALUES (?,?,?,?)', 
-              (title, content, author, date))
+    date = datetime.now().strftime("%Y-%m-%d %H:%M")
+    c.execute('INSERT INTO articles (title, content, image_base64, author, date) VALUES (?,?,?,?,?)', 
+              (title, content, image_b64, author, date))
     conn.commit()
 
-def update_article(id, title, content):
+def update_article(id, title, content, image_b64):
     c = conn.cursor()
-    c.execute('UPDATE articles SET title = ?, content = ? WHERE id = ?', (title, content, id))
-    conn.commit()
-
-def delete_article(id):
-    c = conn.cursor()
-    c.execute('DELETE FROM articles WHERE id = ?', (id,))
+    if image_b64:
+        c.execute('UPDATE articles SET title=?, content=?, image_base64=? WHERE id=?', (title, content, image_b64, id))
+    else:
+        c.execute('UPDATE articles SET title=?, content=? WHERE id=?', (title, content, id))
     conn.commit()
 
 # --- 页面配置 ---
-st.set_page_config(page_title="信息发布门户", layout="wide")
+st.set_page_config(page_title="信息发布门户", layout="centered")
 
 # --- 侧边栏：登录逻辑 ---
-# 提示：实际生产中请使用加密存储密码，这里仅作演示
 ADMIN_USER = "admin"
-ADMIN_PASSWORD = "password123"
+ADMIN_PASSWORD = "123"
 
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 with st.sidebar:
-    st.title("🛡️ 登录发布")
+    st.title("🛡️ 管理信息")
     if not st.session_state.logged_in:
-        username = st.text_input("用户名")
-        password = st.text_input("密码", type="password")
-        if st.button("登录"):
-            if username == ADMIN_USER and password == ADMIN_PASSWORD:
+        user = st.text_input("用户名")
+        pwd = st.text_input("密码", type="password")
+        if st.button("进入管理模式"):
+            if user == ADMIN_USER and pwd == ADMIN_PASSWORD:
                 st.session_state.logged_in = True
-                st.success("管理员已登录")
                 st.rerun()
             else:
-                st.error("用户名或密码错误")
+                st.error("验证失败")
     else:
-        st.write(f"当前身份: **管理员 ({ADMIN_USER})**")
-        if st.button("注销"):
+        st.success("管理员在线")
+        if st.button("退出登录"):
             st.session_state.logged_in = False
             st.rerun()
 
 # --- 主界面 ---
-st.title("📢 信息发布平台")
+st.title("🎨 信息资讯")
 
-# 如果是管理员，显示发布入口
+# 1. 管理员发布区
 if st.session_state.logged_in:
-    with st.expander("➕ 发布新信息"):
-        with st.form("add_form", clear_on_submit=True):
-            new_title = st.text_input("标题")
-            new_author = st.text_input("发布者", value="系统管理员")
-            new_content = st.text_area("内容")
-            submit = st.form_submit_button("立即发布")
-            if submit and new_title and new_content:
-                add_article(new_title, new_content, new_author)
-                st.success("信息发布成功！")
+    with st.expander("📝 编辑新文章", expanded=False):
+        new_title = st.text_input("文章标题")
+        
+        st.write("正文编辑 (支持字体加粗、颜色、列表等):")
+        # 富文本编辑器
+        new_content = st_quill(placeholder="撰写内容...", key="main_editor")
+        
+        new_image = st.file_uploader("上传封面图片", type=["jpg", "png", "jpeg"])
+        
+        if st.button("发布文章"):
+            if new_title and new_content:
+                img_b64 = image_to_base64(new_image)
+                add_article(new_title, new_content, img_b64, "系统管理员")
+                st.success("发布成功！")
                 st.rerun()
+            else:
+                st.warning("标题和内容不能为空")
 
-# --- 信息列表展示 ---
-articles_df = get_all_articles()
+# 2. 信息展示区
+articles = pd.read_sql('SELECT * FROM articles ORDER BY id DESC', conn)
 
-if articles_df.empty:
-    st.info("暂无发布的信息。")
-else:
-    for index, row in articles_df.iterrows():
-        with st.container(border=True):
-            col1, col2 = st.columns([0.8, 0.2])
-            
+for _, row in articles.iterrows():
+    with st.container():
+        st.markdown("---")
+        # 标题
+        st.header(row['title'])
+        # 元数据
+        st.caption(f"📅 {row['date']}  |  👤 {row['author']}")
+        
+        # 显示图片
+        if row['image_base64']:
+            st.image(base64.b64decode(row['image_base64']), use_container_width=True)
+        
+        # 显示富文本内容 (注意：st.markdown 需要开启 unsafe_allow_html)
+        st.markdown(row['content'], unsafe_allow_html=True)
+        
+        # 管理员操作
+        if st.session_state.logged_in:
+            col1, col2 = st.columns([1, 5])
             with col1:
-                st.subheader(row['title'])
-                st.caption(f"发布于: {row['date']} | 发布者: {row['author']}")
-                st.write(row['content'])
-            
-            # 只有管理员可见修改和删除按钮
-            if st.session_state.logged_in:
-                with col2:
-                    st.write("🛠️ 管理操作")
-                    # 编辑功能
-                    if st.button("修改", key=f"edit_{row['id']}"):
-                        st.session_state.edit_id = row['id']
-                    
-                    # 删除功能
-                    if st.button("删除", key=f"del_{row['id']}", type="primary"):
-                        delete_article(row['id'])
-                        st.warning("信息已删除")
-                        st.rerun()
+                if st.button("删除", key=f"del_{row['id']}"):
+                    c = conn.cursor()
+                    c.execute('DELETE FROM articles WHERE id=?', (row['id'],))
+                    conn.commit()
+                    st.rerun()
+            with col2:
+                if st.button("修改", key=f"edit_btn_{row['id']}"):
+                    st.session_state[f"editing_{row['id']}"] = True
 
-        # 处理编辑弹窗逻辑（通过 session_state 控制）
-        if 'edit_id' in st.session_state and st.session_state.edit_id == row['id']:
-            with st.form(f"edit_form_{row['id']}"):
-                edit_title = st.text_input("修改标题", value=row['title'])
-                edit_content = st.text_area("修改内容", value=row['content'])
-                if st.form_submit_button("保存修改"):
-                    update_article(row['id'], edit_title, edit_content)
-                    del st.session_state.edit_id
-                    st.success("修改成功！")
-                    st.rerun()
-                if st.form_submit_button("取消"):
-                    del st.session_state.edit_id
-                    st.rerun()
+            # 修改表单
+            if st.session_state.get(f"editing_{row['id']}", False):
+                with st.form(f"form_{row['id']}"):
+                    edit_title = st.text_input("标题", value=row['title'])
+                    edit_content = st_quill(value=row['content'], key=f"editor_{row['id']}")
+                    edit_img = st.file_uploader("更换图片 (留空保留原图)", type=["jpg", "png"])
+                    
+                    if st.form_submit_button("保存"):
+                        img_b64 = image_to_base64(edit_img)
+                        update_article(row['id'], edit_title, edit_content, img_b64)
+                        st.session_state[f"editing_{row['id']}"] = False
+                        st.rerun()
+                    if st.form_submit_button("取消"):
+                        st.session_state[f"editing_{row['id']}"] = False
+                        st.rerun()
